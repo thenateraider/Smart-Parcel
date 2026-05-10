@@ -1,5 +1,169 @@
 # Smart Parcel App
 
+Smart Parcel App is an Android application for an ESP32-based smart parcel box. The app pairs with the parcel box through NFC, communicates with the ESP32 through Bluetooth Low Energy (BLE), starts parcel delivery tracking, displays live delivery status, confirms parcel pickup with a 6-digit unlock code, and reads delivery history stored on the ESP32 SD card.
+
+## Project Overview
+
+Smart Parcel is a smart parcel box prototype for tracking parcel handling conditions during delivery. The hardware side uses an ESP32 connected to sensors and control modules such as a load cell, temperature sensor, IMU for fall/flip detection, tamper detection switch, buzzer, solenoid lock, display, and SD card storage.
+
+The Android app follows the BLE protocol implemented in the Arduino firmware `LVGLSMParcel.ino`. A single BLE service/characteristic is used for command exchange, while NFC is used to read the parcel box BLE MAC address for quick pairing.
+
+## Key Features
+
+- Pair with the smart parcel box by reading an NFC tag payload in this format: `SMPC://AA:BB:CC:DD:EE:FF`
+- Connect to the ESP32 BLE device named `SMARTPARCEL_1`
+- Start a new delivery record with sender name, recipient name, unlock code, and sent timestamp
+- Display active parcel status including Track ID, sender/recipient information, flip count, impact count, tamper count, weight, and temperature
+- Confirm parcel pickup with a 6-digit unlock code
+- Notify the ESP32 when the unlock code is entered incorrectly 3 times so the buzzer can trigger an alert
+- Read the latest 10 delivery history records from the ESP32
+- Reset the ESP32 storage state through a BLE command
+
+## Tech Stack
+
+- Kotlin
+- Jetpack Compose
+- Material 3
+- Android BLE GATT API
+- Android NFC Reader Mode
+- Gradle Kotlin DSL
+- Minimum SDK 33
+- Target SDK 35
+
+## Important Project Structure
+
+```text
+app/src/main/java/com/nateapps/smartparcelapp/
+├── MainActivity.kt          # App entry point, navigation, main BLE message listener
+├── BleHelper.kt             # BLE connection, service discovery, notify, and write helper
+├── HomeScreen.kt            # Main screen: NFC pairing, start delivery, status, pickup confirmation
+├── HomeViewModel.kt         # App state and status parser
+├── HistoryScreen.kt         # Delivery history screen
+├── MoreScreen.kt            # More/options screen
+└── ui/theme/                # Theme, colors, and typography
+```
+
+## ESP32 Integration
+
+The ESP32 firmware in `LVGLSMParcel.ino` advertises the BLE device as `SMARTPARCEL_1`.
+
+| Item | Value |
+| --- | --- |
+| BLE Service UUID | `0000abcd-0000-1000-8000-00805f9b34fb` |
+| BLE Characteristic UUID | `0000dcba-0000-1000-8000-00805f9b34fb` |
+| Characteristic properties | Read, Write, Notify |
+| NFC payload | `SMPC://<BLE_MAC_ADDRESS>` |
+
+Main communication flow:
+
+1. The user taps the phone on the NFC tag attached to the parcel box.
+2. The app reads the BLE MAC address from `SMPC://...`.
+3. The app connects to the ESP32 through BLE.
+4. After service/characteristic discovery, the app sends `smpc_hi`.
+5. The ESP32 replies with `smpc_welcome`.
+6. The app sends `smpc_status` to request the current `/sdcard/status.txt`.
+7. The ESP32 sends status lines through BLE notify between `smpc_status_start` and `smpc_status_end`.
+
+## BLE Commands
+
+| App command | Description |
+| --- | --- |
+| `smpc_hi` | Handshake after BLE connection is ready |
+| `smpc_status` | Request current parcel status from `status.txt` |
+| `smpc_starttrack,<sender>,<recipient>,<code>,<timestamp>;` | Start a new delivery tracking session |
+| `smpc_code_true,<received_timestamp>;` | Confirm that the recipient entered the correct code and picked up the parcel |
+| `smpc_code_false3time` | Notify ESP32 that the code was entered incorrectly 3 times |
+| `smpc_list_info` | Request the latest delivery history list |
+| `smpc_<TrackID>` | Request history details for a Track ID, for example `smpc_T0001` |
+| `smpc_resetfactory` | Reset ESP32 SD card data |
+
+| ESP32 message | Description |
+| --- | --- |
+| `smpc_welcome` | ESP32 is ready to communicate |
+| `smpc_status_start` / `smpc_status_end` | Start/end markers for status data |
+| `smpc_okstart` | Delivery tracking started successfully |
+| `smpc_done_thank` | Parcel pickup confirmed successfully |
+| `smpc_nowtemp_<value>` | Current temperature |
+| `smpc_nowkg_<value>` | Current weight |
+| `smpc_list_info_end` | End of history list |
+| `smpc_resetok` | Factory reset completed |
+
+## ESP32 SD Card Data Format
+
+When a delivery is active, `/sdcard/status.txt` uses this format:
+
+```text
+process
+<sender>
+<recipient>
+<unlock_code>
+<track_id>
+<sent_timestamp>
+<flip_count>
+<impact_count>
+<tamper_count>
+<initial_weight>
+<initial_temperature>
+```
+
+After parcel pickup is confirmed, the ESP32 changes the status to `done` and creates a backup history file such as `/sdcard/T0001_info.txt`.
+
+## How To Use
+
+1. Enable Bluetooth and NFC on the Android phone.
+2. Open the Smart Parcel app.
+3. Tap the phone on the NFC tag attached to the parcel box.
+4. After BLE connection is established, start a new delivery.
+5. Enter sender name, recipient name, and a 6-digit unlock code.
+6. The app sends the delivery data to the ESP32 and tracking begins.
+7. During delivery, the app can show flip count, impact count, tamper count, weight, and temperature.
+8. When the recipient receives the parcel, confirm pickup and enter the 6-digit unlock code.
+9. If the code is correct, the ESP32 saves the history record and ends the delivery session.
+
+## ESP32/NFC Preparation
+
+- Upload the ESP32 firmware from the Arduino project that contains the `LVGLSMParcel.ino` logic.
+- Confirm that the ESP32 advertises BLE as `SMARTPARCEL_1`.
+- Prepare an NFC NDEF text payload as `SMPC://<BLE_MAC_ADDRESS>`, for example `SMPC://A1:B2:C3:D4:E5:F6`.
+- Make sure the SD card has the initial files:
+
+```text
+/sdcard/status.txt   -> unregistered
+/sdcard/c_tid.txt    -> 0
+```
+
+## Build
+
+Open the project with Android Studio or run:
+
+```bash
+./gradlew assembleDebug
+```
+
+Run unit tests:
+
+```bash
+./gradlew test
+```
+
+Note: Real device testing requires an Android phone that supports NFC and Bluetooth LE.
+
+## Android Permissions
+
+- `NFC` for reading the parcel box tag
+- `BLUETOOTH_SCAN` for Bluetooth-related behavior on Android 12+
+- `BLUETOOTH_CONNECT` for BLE connection and communication with the ESP32
+
+## Real-World Usage Notes
+
+This project is suitable for a smart parcel box prototype for homes, dormitories, offices, or small parcel pickup/drop-off points. It can be extended with cloud sync, internet notifications, multi-user accounts, recipient QR codes, or an admin dashboard.
+
+Before production use, additional security should be added, such as BLE encryption, app-to-device authentication, safer unlock-code handling, and protection against NFC tag cloning.
+
+---
+
+# Smart Parcel App ภาษาไทย
+
 แอป Android สำหรับใช้งานร่วมกับกล่องพัสดุอัจฉริยะ Smart Parcel ที่ใช้ ESP32 เป็นตัวควบคุมหลัก แอปนี้ทำหน้าที่จับคู่กับกล่องผ่าน NFC, สื่อสารกับ ESP32 ผ่าน BLE, เริ่มรายการฝากส่งพัสดุ, แสดงสถานะระหว่างขนส่ง, ยืนยันการรับพัสดุด้วยรหัส 6 หลัก และเรียกดูประวัติการส่งจากข้อมูลที่บันทึกไว้ใน SD card ของอุปกรณ์
 
 ## ภาพรวมโปรเจกต์
