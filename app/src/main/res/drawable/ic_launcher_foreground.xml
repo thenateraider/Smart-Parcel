@@ -1,0 +1,5 @@
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@mipmap/icon_app"
+    android:gravity="center"
+    android:scaleX="3"
+    android:scaleY="3" />
